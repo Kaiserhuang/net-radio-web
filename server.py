@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import logging
+import uvicorn
 import xlrd
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
