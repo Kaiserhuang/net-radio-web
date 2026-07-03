@@ -367,6 +367,34 @@ a { color: var(--accent); text-decoration: none; }
 .player-volume .vol-icon { font-size: 16px; cursor: pointer; user-select: none; }
 .company-info { font-size: 11px; color: var(--text3); white-space: nowrap; }
 
+/* Modal */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 24px; width: 440px; max-width: 90vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.modal h3 { font-size: 18px; margin-bottom: 16px; }
+.modal label { font-size: 13px; color: var(--text2); display: block; margin-bottom: 4px; }
+.modal input, .modal select {
+  width: 100%; padding: 8px 12px; margin-bottom: 12px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 14px; outline: none;
+}
+.modal input:focus, .modal select:focus { border-color: var(--accent); }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.modal-actions button { padding: 8px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; }
+.modal-actions .btn-primary { background: var(--accent); color: var(--bg); font-weight: 600; }
+.modal-actions .btn-primary:hover { box-shadow: 0 0 16px rgba(0,212,255,0.3); }
+.modal-actions .btn-cancel { background: var(--surface2); color: var(--text2); }
+.modal-actions .btn-cancel:hover { color: var(--text); }
+.modal .field-hint { font-size: 11px; color: var(--text3); margin-top: -8px; margin-bottom: 12px; }
+
 /* Map */
 .map-wrapper { height: 100%; display: flex; flex-direction: column; }
 .map-container { flex: 1; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); min-height: 400px; position: relative; }
@@ -425,6 +453,7 @@ a { color: var(--accent); text-decoration: none; }
   <div class="header-actions">
     <button class="header-btn" id="favViewBtn" onclick="toggleFavView()">⭐ 收藏 <span class="fav-count" id="favCount">0</span></button>
     <button class="header-btn" id="homeBtn" onclick="showHome()">🏠 首页</button>
+    <button class="header-btn" onclick="openAddModal()" style="color:var(--accent);border-color:var(--accent)">＋ 添加电台</button>
   </div>
 </header>
 
@@ -454,6 +483,29 @@ a { color: var(--accent); text-decoration: none; }
     <input type="range" id="volBar" min="0" max="1" step="0.05" value="0.8" oninput="setVolume(event)">
   </div>
 </footer>
+
+<div class="modal-overlay" id="stationModal">
+  <div class="modal">
+    <h3 id="modalTitle">添加电台</h3>
+    <label>电台名称</label>
+    <input id="modalName" type="text" placeholder="如: 北京交通广播">
+    <label>播放地址 (URL)</label>
+    <input id="modalUrl" type="text" placeholder="如: http://example.com/stream.m3u8">
+    <label>省份/分类</label>
+    <input id="modalProvince" type="text" placeholder="如: 北京">
+    <div class="field-hint">用于左侧分类导航，已存在的省份会自动归入</div>
+    <label>流格式</label>
+    <select id="modalFormat">
+      <option value="hls">HLS (m3u8)</option>
+      <option value="mp3">MP3</option>
+    </select>
+    <input id="modalRefId" type="hidden">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">取消</button>
+      <button class="btn-primary" onclick="saveStation()">保存</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ---- State ----
@@ -1040,12 +1092,15 @@ renderCard = function(item) {
   const metaParts = [];
   if (item.province) metaParts.push(escapeHtml(item.province));
   if (item.category) metaParts.push(escapeHtml(item.category));
+  const isUserStation = item.ref_id && item.ref_id.startsWith('user:');
   return `<div class="card ${isPlaying ? 'playing' : ''}" onclick="playQueueClick(${idx})">
     <div class="card-name">${nameHtml} <span class="playing-indicator"></span></div>
     <div class="card-meta">${metaParts.join(' · ')} <span class="format-badge">${item.format}</span></div>
     <div class="card-actions">
       <button class="card-btn play-btn ${isPlaying ? 'playing' : ''}" onclick="event.stopPropagation(); playQueueClick(${idx})">${isPlaying ? '⏸ 播放中' : '▶ 播放'}</button>
       <button class="card-btn fav-btn ${isFav ? 'active' : ''}" onclick="event.stopPropagation(); favClick(${idx})">${isFav ? '⭐' : '☆'}</button>
+      <button class="card-btn" style="border:1px solid var(--border);background:transparent;color:var(--text2);padding:5px 8px" onclick="event.stopPropagation(); openEditModal(${idx})">✎</button>
+      <button class="card-btn" style="border:1px solid #ef4444;background:transparent;color:#ef4444;padding:5px 8px" onclick="event.stopPropagation(); deleteStation(${idx})">✕</button>
     </div>
   </div>`;
 };
@@ -1100,6 +1155,90 @@ function unfavClick(idx) {
   if (idx >= 0 && idx < state.playQueue.length) {
     toggleFavorite(state.playQueue[idx], null);
   }
+}
+
+// ---- Station CRUD ----
+function openAddModal() {
+  document.getElementById('modalTitle').textContent = '添加电台';
+  document.getElementById('modalRefId').value = '';
+  document.getElementById('modalName').value = '';
+  document.getElementById('modalUrl').value = '';
+  document.getElementById('modalProvince').value = '';
+  document.getElementById('modalFormat').value = 'hls';
+  document.getElementById('stationModal').classList.add('open');
+}
+
+function openEditModal(idx) {
+  const item = state.playQueue[idx];
+  if (!item) return;
+  document.getElementById('modalTitle').textContent = '编辑电台';
+  document.getElementById('modalRefId').value = item.ref_id || '';
+  document.getElementById('modalName').value = item.name || '';
+  document.getElementById('modalUrl').value = item.url || '';
+  document.getElementById('modalProvince').value = item.province || '';
+  document.getElementById('modalFormat').value = item.format || 'hls';
+  document.getElementById('stationModal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('stationModal').classList.remove('open');
+}
+
+async function saveStation() {
+  const refId = document.getElementById('modalRefId').value;
+  const name = document.getElementById('modalName').value.trim();
+  const url = document.getElementById('modalUrl').value.trim();
+  const province = document.getElementById('modalProvince').value.trim();
+  const format = document.getElementById('modalFormat').value;
+
+  if (!name || !url) { alert('电台名称和播放地址不能为空'); return; }
+
+  const body = { name, url, format, province, note: '' };
+  let res;
+  if (refId) {
+    res = await api('/api/stations/' + refId, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+  } else {
+    res = await api('/api/stations', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  if (res) {
+    closeModal();
+    await refreshStationData();
+    render();
+  }
+}
+
+async function deleteStation(idx) {
+  const item = state.playQueue[idx];
+  if (!item || !item.ref_id) return;
+  if (!confirm('确定要删除电台「' + item.name + '」吗？')) return;
+
+  const res = await api('/api/stations/' + item.ref_id, { method: 'DELETE' });
+  if (res) {
+    if (state.currentTrack && state.currentTrack.ref_id === item.ref_id) {
+      destroyHls(); destroyAudio();
+      state.playing = false; state.currentTrack = null;
+      document.getElementById('playPauseBtn').textContent = '▶';
+      updatePlayerUI();
+    }
+    await refreshStationData();
+    render();
+  }
+}
+
+async function refreshStationData() {
+  const [catData, stationData] = await Promise.all([
+    api('/api/categories'),
+    api('/api/stations'),
+  ]);
+  state.categories = catData?.categories || [];
+  state.allStations = stationData?.stations || [];
+  await loadFavorites();
 }
 
 init();

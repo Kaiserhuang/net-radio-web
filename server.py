@@ -145,6 +145,24 @@ def init_db():
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_fav_device ON favorites(device_id)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS custom_stations (
+            ref_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            format TEXT DEFAULT 'hls',
+            province TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            geo_name TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS deleted_refs (
+            ref_id TEXT PRIMARY KEY,
+            deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -168,10 +186,46 @@ init_db()
 app = FastAPI(title="Net Radio Web")
 
 
+def get_merged_stations():
+    conn = sqlite3.connect(DB_PATH)
+    deleted = set(r[0] for r in conn.execute("SELECT ref_id FROM deleted_refs").fetchall())
+    customs = {}
+    for r in conn.execute("SELECT * FROM custom_stations").fetchall():
+        customs[r[0]] = {
+            "ref_id": r[0], "name": r[1], "url": r[2], "format": r[3],
+            "province": r[4], "note": r[5], "geo_name": r[6]
+        }
+    conn.close()
+
+    items = [s for s in stations if s["ref_id"] not in deleted]
+    for i, s in enumerate(items):
+        if s["ref_id"] in customs:
+            items[i] = {**s, **customs[s["ref_id"]]}
+    for cid, c in customs.items():
+        if cid not in {s["ref_id"] for s in stations}:
+            c["geo_name"] = c.get("geo_name") or extract_location(c["name"])[0]
+            items.append(c)
+    return items
+
+
+def rebuild_categories():
+    global categories
+    merged = get_merged_stations()
+    prov_count = {}
+    for s in merged:
+        prov_count[s["province"]] = prov_count.get(s["province"], 0) + 1
+    categories.clear()
+    for p, cnt in sorted(prov_count.items()):
+        categories.append({"name": p, "count": cnt, "type": "station"})
+    categories.append({"name": "相声", "count": len([p for p in podcasts if p["category"] == "相声"]), "type": "podcast"})
+    categories.append({"name": "脱口秀", "count": len([p for p in podcasts if p["category"] == "脱口秀"]), "type": "podcast"})
+
+
 @app.get("/api/station-locations")
 def get_station_locations():
+    merged = get_merged_stations()
     groups = {}
-    for s in stations:
+    for s in merged:
         loc_name, coord = extract_location(s["name"])
         if loc_name not in groups:
             groups[loc_name] = {"name": loc_name, "coord": coord, "count": 0, "stations": []}
@@ -188,7 +242,7 @@ def get_categories():
 
 @app.get("/api/stations")
 def get_stations(category: str = "", search: str = "", geo: str = ""):
-    items = stations
+    items = get_merged_stations()
     if category:
         items = [s for s in items if s["province"] == category]
     if geo:
@@ -197,6 +251,64 @@ def get_stations(category: str = "", search: str = "", geo: str = ""):
         q = search.lower()
         items = [s for s in items if q in s["name"].lower()]
     return {"stations": items, "total": len(items)}
+
+
+class StationIn(BaseModel):
+    name: str
+    url: str
+    format: str = "hls"
+    province: str = ""
+    note: str = ""
+
+
+@app.post("/api/stations")
+def create_station(st: StationIn):
+    import uuid
+    ref_id = f"user:{uuid.uuid4().hex[:12]}"
+    geo = extract_location(st.name)[0]
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO custom_stations (ref_id, name, url, format, province, note, geo_name) VALUES (?,?,?,?,?,?,?)",
+        (ref_id, st.name, st.url, st.format, st.province, st.note, geo)
+    )
+    conn.commit()
+    conn.close()
+    rebuild_categories()
+    return {"ref_id": ref_id, "message": "created"}
+
+
+@app.put("/api/stations/{ref_id}")
+def update_station(ref_id: str, st: StationIn):
+    conn = sqlite3.connect(DB_PATH)
+    # Check if it's a custom station
+    cur = conn.execute("SELECT 1 FROM custom_stations WHERE ref_id=?", (ref_id,))
+    exists = cur.fetchone()
+    if exists:
+        conn.execute(
+            "UPDATE custom_stations SET name=?, url=?, format=?, province=?, note=? WHERE ref_id=?",
+            (st.name, st.url, st.format, st.province, st.note, ref_id)
+        )
+    else:
+        # Create an override for an Excel station
+        conn.execute(
+            "INSERT INTO custom_stations (ref_id, name, url, format, province, note, geo_name) VALUES (?,?,?,?,?,?,?)",
+            (ref_id, st.name, st.url, st.format, st.province, st.note, extract_location(st.name)[0])
+        )
+    conn.commit()
+    conn.close()
+    rebuild_categories()
+    return {"message": "updated"}
+
+
+@app.delete("/api/stations/{ref_id}")
+def delete_station(ref_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT OR IGNORE INTO deleted_refs (ref_id) VALUES (?)", (ref_id,))
+    conn.execute("DELETE FROM custom_stations WHERE ref_id=?", (ref_id,))
+    conn.commit()
+    conn.close()
+    rebuild_categories()
+    return {"message": "deleted"}
 
 
 @app.get("/api/podcasts")
