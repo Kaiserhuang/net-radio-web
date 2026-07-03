@@ -4,13 +4,15 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/var/www/net-radio
-ExecStart=/usr/bin/python3 server.py
+User=netradio
+Group=netradio
+WorkingDirectory=/opt/net-radio
+ExecStart=/opt/net-radio/venv/bin/python server.py
 Restart=always
 RestartSec=5
-User=www-data
 Environment=HOST=127.0.0.1
 Environment=PORT=8000
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
