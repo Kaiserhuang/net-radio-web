@@ -13,7 +13,8 @@ log = logging.getLogger(__name__)
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(DIR, "net_radio.db")
+IS_VERCEL = os.getenv("VERCEL", "") == "1"
+DB_PATH = os.getenv("DB_PATH", os.path.join(DIR, "net_radio.db"))
 EXCEL_PATH = os.path.join(DIR, "radio-list.xls")
 
 stations = []
@@ -376,9 +377,10 @@ def health():
     return {"status": "ok", "stations": len(stations), "podcasts": len(podcasts)}
 
 
-static_dir = os.path.join(DIR, "static")
-os.makedirs(static_dir, exist_ok=True)
-app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+if not IS_VERCEL:
+    static_dir = os.path.join(DIR, "static")
+    os.makedirs(static_dir, exist_ok=True)
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
 if __name__ == "__main__":
     log.info("Starting on %s:%s", HOST, PORT)
